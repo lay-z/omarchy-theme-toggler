@@ -107,66 +107,6 @@ if [[ -n $BACKGROUND ]]; then
   fi
 fi
 
-# OpenCode's TUI rediscovers the terminal palette when it receives SIGUSR2.
-# Omarchy's omarchy-restart-opencode looks for a process literally named
-# `opencode`, but current releases run as `opencode.exe`, so that signal never
-# lands. Signal each TUI process directly, skipping the shared service and any
-# process that does not handle SIGUSR2 (the server does not).
-reload_opencode() {
-  command -v opencode >/dev/null 2>&1 || return 0
-
-  local pid args caught signalled=0
-  for pid in $(pgrep -x opencode 2>/dev/null) $(pgrep -x opencode.exe 2>/dev/null); do
-    [[ -r /proc/$pid/cmdline && -r /proc/$pid/status ]] || continue
-
-    args=$(tr '\0' ' ' <"/proc/$pid/cmdline")
-    [[ $args == *" serve --service"* ]] && continue
-
-    caught=$(awk '/^SigCgt:/ { print $2 }' "/proc/$pid/status")
-    [[ -n $caught ]] || continue
-    # Signal 12 is SIGUSR2; its bit in SigCgt is 1 << 11.
-    (( (0x$caught & 0x800) != 0 )) || continue
-
-    if kill -USR2 "$pid" 2>/dev/null; then
-      log "opencode theme refresh -> $pid"
-      signalled=1
-    fi
-  done
-
-  [[ $signalled -eq 1 ]] || log "no opencode TUI running; skipped theme refresh"
-}
-
-# A multiplexer emulates its own terminal, so it answers OpenCode's palette
-# query from a cached copy of the host palette. OpenCode can only pick up the
-# new theme once that cache is refreshed. Herdr re-reads the host palette when
-# it receives SIGWINCH, and the signal has to go to the attached client rather
-# than the shared server, which has no terminal of its own.
-refresh_multiplexers() {
-  local pid args refreshed=0
-  for pid in $(pgrep -x herdr 2>/dev/null); do
-    [[ -r /proc/$pid/cmdline ]] || continue
-    args=$(tr '\0' ' ' <"/proc/$pid/cmdline")
-    [[ $args == *" server"* ]] && continue
-
-    if kill -WINCH "$pid" 2>/dev/null; then
-      log "herdr palette refresh -> $pid"
-      refreshed=1
-    fi
-  done
-  [[ $refreshed -eq 1 ]]
-}
-
-if refresh_multiplexers; then
-  # Herdr re-reads the palette on its next redraw, so give it a moment and
-  # signal OpenCode a second time to cover a slow refresh.
-  sleep 0.5
-  reload_opencode
-  sleep 1
-  reload_opencode
-else
-  reload_opencode
-fi
-
 if ! run_hook "$POST_HOOK" post; then
   notify normal "Theme changed" "The post-toggle hook failed. See $LOG"
   log "toggle finished with post hook failure"

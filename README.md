@@ -121,25 +121,6 @@ panel and it becomes one of the two sides.
 
 ## Pre/post hooks
 
-Before your hooks run, the plugin also refreshes OpenCode when it is installed:
-
-- It sends `SIGUSR2` to every running OpenCode TUI. That signal is how the TUI
-  rediscovers the terminal palette; `opencode reload` only reloads server
-  configuration.
-- The shared background service is skipped, as are processes that do not
-  handle `SIGUSR2`.
-- If OpenCode is not installed, or no TUI is running, the step is skipped.
-
-This also covers Omarchy's own `omarchy-restart-opencode`, which looks for a
-process named `opencode`; current releases run as `opencode.exe`.
-
-If OpenCode runs inside a terminal multiplexer, the multiplexer is refreshed
-first. A multiplexer emulates its own terminal, so it answers OpenCode's palette
-query from a cached copy of the host palette; OpenCode stays on the old theme
-until that cache is updated. Herdr re-reads the palette when it receives
-`SIGWINCH`, so the plugin sends that to each attached Herdr client (not the
-shared server) before signalling OpenCode.
-
 Two scripts let you run your own code around a switch. They are created for you
 on first load:
 
@@ -184,15 +165,14 @@ OMARCHY_THEME_TOGGLER_PLUGIN_DIR
 
 ### Example post hook
 
-This reloads an application that reads its theme from disk after every switch.
-Replace the `herdr` command with whatever your app needs:
+Replace the placeholder command with the reload step your application provides:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-if command -v herdr >/dev/null 2>&1; then
-  herdr server reload-config 2>/dev/null || true
+if command -v my-app >/dev/null 2>&1; then
+  my-app reload-theme 2>/dev/null || true
 fi
 ```
 
