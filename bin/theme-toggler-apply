@@ -107,26 +107,33 @@ if [[ -n $BACKGROUND ]]; then
   fi
 fi
 
-# Omarchy 4's omarchy-restart-opencode matches a process literally named
-# `opencode`, but current OpenCode releases run as `opencode.exe`, so the
-# signal never lands. The CLI's own reload command reaches every client of the
-# background service and is a no-op when the service is not running.
+# OpenCode's TUI rediscovers the terminal palette when it receives SIGUSR2.
+# Omarchy's omarchy-restart-opencode looks for a process literally named
+# `opencode`, but current releases run as `opencode.exe`, so that signal never
+# lands. Signal each TUI process directly, skipping the shared service and any
+# process that does not handle SIGUSR2 (the server does not).
 reload_opencode() {
   command -v opencode >/dev/null 2>&1 || return 0
 
-  local service
-  service=$(timeout 5 opencode service status 2>/dev/null || true)
-  if [[ $service != http* ]]; then
-    log "opencode service not running; skipped reload"
-    return 0
-  fi
+  local pid args caught signalled=0
+  for pid in $(pgrep -x opencode 2>/dev/null) $(pgrep -x opencode.exe 2>/dev/null); do
+    [[ -r /proc/$pid/cmdline && -r /proc/$pid/status ]] || continue
 
-  log "opencode reload"
-  if timeout 20 opencode reload >>"$LOG" 2>&1; then
-    log "opencode reload ok"
-  else
-    log "opencode reload failed"
-  fi
+    args=$(tr '\0' ' ' <"/proc/$pid/cmdline")
+    [[ $args == *" serve --service"* ]] && continue
+
+    caught=$(awk '/^SigCgt:/ { print $2 }' "/proc/$pid/status")
+    [[ -n $caught ]] || continue
+    # Signal 12 is SIGUSR2; its bit in SigCgt is 1 << 11.
+    (( (0x$caught & 0x800) != 0 )) || continue
+
+    if kill -USR2 "$pid" 2>/dev/null; then
+      log "opencode theme refresh -> $pid"
+      signalled=1
+    fi
+  done
+
+  [[ $signalled -eq 1 ]] || log "no opencode TUI running; skipped theme refresh"
 }
 
 reload_opencode

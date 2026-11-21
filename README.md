@@ -123,11 +123,15 @@ panel and it becomes one of the two sides.
 
 Before your hooks run, the plugin also refreshes OpenCode when it is installed:
 
-- If the OpenCode background service is running, it runs `opencode reload` so
-  every connected TUI picks up the new config. (Omarchy's own
-  `omarchy-restart-opencode` currently looks for a process named `opencode`,
-  while current releases run as `opencode.exe`, so that signal misses them.)
-- If OpenCode is not installed, or its service is stopped, the step is skipped.
+- It sends `SIGUSR2` to every running OpenCode TUI. That signal is how the TUI
+  rediscovers the terminal palette; `opencode reload` only reloads server
+  configuration.
+- The shared background service is skipped, as are processes that do not
+  handle `SIGUSR2`.
+- If OpenCode is not installed, or no TUI is running, the step is skipped.
+
+This also covers Omarchy's own `omarchy-restart-opencode`, which looks for a
+process named `opencode`; current releases run as `opencode.exe`.
 
 Two scripts let you run your own code around a switch. They are created for you
 on first load:
@@ -138,10 +142,8 @@ on first load:
 ```
 
 Both are ordinary bash scripts, so they can be as long as you need and can call
-tmux, herdr, or anything else. The **Edit pre-toggle hook** and **Edit
-post-toggle hook** buttons in the panel open them in your configured editor.
-[`examples/post-toggle.sh`](examples/post-toggle.sh) is a complete tmux and
-herdr example.
+any command you like. The **Edit pre-toggle hook** and **Edit post-toggle hook**
+buttons in the panel open them in your configured editor.
 
 - The **pre** hook runs before `omarchy theme set`. If it exits non-zero, the
   switch is cancelled and the theme is left alone.
@@ -173,104 +175,14 @@ OMARCHY_THEME_TOGGLER_PREVIOUS_THEME
 OMARCHY_THEME_TOGGLER_PLUGIN_DIR
 ```
 
-### Tmux
-
-`omarchy theme set` already runs `omarchy-theme-set-tmux`, which updates the
-tmux server's theme environment, pane colors, cursor color, and window styles.
-It does not re-read your tmux configuration, so custom tmux styling can keep
-the old look.
-
-Catppuccin/tmux is a special case. It caches every color in `@thm_*` options
-using `set -o`, so only if the option is not already set. Changing
-`@catppuccin_flavor` and re-sourcing `tmux.conf` therefore keeps the previous
-palette. A working post hook has to clear those cached options and source the
-new flavor explicitly:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-if command -v tmux >/dev/null 2>&1 && tmux has-session >/dev/null 2>&1; then
-  case "$1" in
-    light) flavor=latte ;;
-    dark) flavor=mocha ;;
-    *) exit 0 ;;
-  esac
-
-  # Remove the hardcoded `set -g @catppuccin_flavor ...` line from tmux.conf,
-  # then let the hook choose the flavor.
-  catppuccin_dir=""
-  for candidate in \
-    "$HOME/.config/tmux/plugins/tmux" \
-    "$HOME/.tmux/plugins/tmux"; do
-    if [[ -d $candidate ]]; then
-      catppuccin_dir=$candidate
-      break
-    fi
-  done
-
-  tmux set -g @catppuccin_flavor "$flavor"
-  tmux source-file "$HOME/.config/tmux/tmux.conf"
-
-  if [[ -n $catppuccin_dir ]]; then
-    # Drop the old flavor's cached @thm_* colors first.
-    tmux show-options -g | awk '/^@thm_/ { print $1 }' | while IFS= read -r option; do
-      tmux set-option -gu "$option"
-    done
-
-    tmux source-file "$catppuccin_dir/themes/catppuccin_${flavor}_tmux.conf"
-    tmux source-file "$catppuccin_dir/catppuccin_options_tmux.conf"
-    tmux source-file "$catppuccin_dir/catppuccin_tmux.conf"
-  fi
-fi
-```
-
-If you do not use catppuccin/tmux, just re-source your config:
-
-```bash
-if command -v tmux >/dev/null 2>&1 && tmux has-session >/dev/null 2>&1; then
-  tmux source-file "$HOME/.config/tmux/tmux.conf"
-fi
-```
-
 ### Example post hook
 
-This refreshes tmux and the running herdr server after a theme change:
+This reloads an application that reads its theme from disk after every switch.
+Replace the `herdr` command with whatever your app needs:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-
-if command -v tmux >/dev/null 2>&1 && tmux has-session >/dev/null 2>&1; then
-  case "$1" in
-    light) flavor=latte ;;
-    dark) flavor=mocha ;;
-    *) exit 0 ;;
-  esac
-
-  tmux set -g @catppuccin_flavor "$flavor"
-
-  catppuccin_dir=""
-  for candidate in \
-    "$HOME/.config/tmux/plugins/tmux" \
-    "$HOME/.tmux/plugins/tmux"; do
-    if [[ -d $candidate ]]; then
-      catppuccin_dir=$candidate
-      break
-    fi
-  done
-
-  if [[ -n $catppuccin_dir ]]; then
-    tmux show-options -g | awk '/^@thm_/ { print $1 }' | while IFS= read -r option; do
-      tmux set-option -gu "$option"
-    done
-    tmux source-file "$catppuccin_dir/themes/catppuccin_${flavor}_tmux.conf"
-    tmux source-file "$catppuccin_dir/catppuccin_options_tmux.conf"
-    tmux source-file "$catppuccin_dir/catppuccin_tmux.conf"
-  else
-    tmux source-file "$HOME/.config/tmux/tmux.conf"
-  fi
-fi
 
 if command -v herdr >/dev/null 2>&1; then
   herdr server reload-config 2>/dev/null || true
