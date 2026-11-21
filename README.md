@@ -133,6 +133,13 @@ Before your hooks run, the plugin also refreshes OpenCode when it is installed:
 This also covers Omarchy's own `omarchy-restart-opencode`, which looks for a
 process named `opencode`; current releases run as `opencode.exe`.
 
+If OpenCode runs inside a terminal multiplexer, the multiplexer is refreshed
+first. A multiplexer emulates its own terminal, so it answers OpenCode's palette
+query from a cached copy of the host palette; OpenCode stays on the old theme
+until that cache is updated. Herdr re-reads the palette when it receives
+`SIGWINCH`, so the plugin sends that to each attached Herdr client (not the
+shared server) before signalling OpenCode.
+
 Two scripts let you run your own code around a switch. They are created for you
 on first load:
 
