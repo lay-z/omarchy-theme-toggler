@@ -221,13 +221,136 @@ Other IPC methods:
 
 ```bash
 omarchy-shell io.github.lay-z.theme-toggler toggle        # switch sides
+omarchy-shell io.github.lay-z.theme-toggler apply light   # apply a specific side
+omarchy-shell io.github.lay-z.theme-toggler apply dark
 omarchy-shell io.github.lay-z.theme-toggler open          # open settings panel
 omarchy-shell io.github.lay-z.theme-toggler refresh       # reload themes and state
 omarchy-shell io.github.lay-z.theme-toggler state         # JSON: mode, theme, background
 ```
 
 `togglePanel` opens the panel as well; `toggle` always means "toggle the
-theme".
+theme". `apply` returns `ok`, `already`, `busy`, `no-state`, `no-theme`, or
+`invalid`, which is useful when a scheduler calls it.
+
+## Automatic switching with darkman
+
+The plugin deliberately does not ship its own scheduler. If you want automatic
+light/dark switching at sunrise and sunset, [`darkman`](https://darkman.whynothugo.nl/)
+does that job well and is available in Arch's `extra` repository. The plugin
+provides an `apply` IPC method so a darkman hook can reuse the same theme,
+background, and pre/post hooks as the bar button.
+
+This is entirely optional. The widget keeps working manually whether or not
+darkman is installed.
+
+### 1. Install darkman
+
+```bash
+omarchy pkg add darkman
+```
+
+### 2. Tell darkman where you are
+
+Create `~/.config/darkman/config.yaml`:
+
+```yaml
+# Use a decimal latitude/longitude. This example is London.
+lat: 51.5074
+lng: -0.1278
+
+# Automatic location needs geoclue and a working agent. Manual coordinates
+# are more predictable and do not reveal your location to another service.
+usegeoclue: false
+
+# Keep the XDG desktop portal alone unless you specifically want darkman to
+# advertise the current mode to portal-aware applications.
+portal: false
+```
+
+If you prefer automatic location, install `geoclue`, set `usegeoclue: true`,
+and make sure a geoclue agent is running. The darkman manual covers the
+details. Manual coordinates are the safer default.
+
+### 3. Add the bridge script
+
+darkman runs every executable in `~/.local/share/darkman/` at each transition
+and passes `light` or `dark` as `$1`. Create the bridge:
+
+```bash
+mkdir -p ~/.local/share/darkman
+
+cat > ~/.local/share/darkman/theme-toggler <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode=${1:-}
+case "$mode" in
+  light | dark) ;;
+  *)
+    echo "theme-toggler: expected light or dark, got '$mode'" >&2
+    exit 2
+    ;;
+esac
+
+# darkman can start before the Omarchy shell has loaded the plugin and its
+# theme list. Retry briefly instead of failing the whole transition.
+for _ in {1..120}; do
+  result=$(omarchy-shell io.github.lay-z.theme-toggler apply "$mode" 2>/dev/null || true)
+  case "$result" in
+    ok | already) exit 0 ;;
+    busy | no-state | no-theme) sleep 0.25 ;;
+    invalid) exit 2 ;;
+    *) sleep 0.5 ;;
+  esac
+done
+
+echo "theme-toggler: plugin did not become ready" >&2
+exit 1
+EOF
+
+chmod +x ~/.local/share/darkman/theme-toggler
+```
+
+The retry loop matters because both services start with your session. If the
+plugin is already on the requested theme, `apply` returns `already` without
+cycling the background or running the hooks again.
+
+### 4. Start darkman
+
+```bash
+systemctl --user enable --now darkman.service
+systemctl --user status darkman.service
+```
+
+Check the current side and test a transition:
+
+```bash
+darkman get
+darkman set light
+darkman set dark
+```
+
+The theme should follow, and the normal pre/post hooks should run. You can
+confirm from the plugin log:
+
+```bash
+tail -20 ~/.local/state/omarchy/theme-toggler.log
+```
+
+From then on, darkman switches at sunrise and sunset. You can still use the
+bar icon or the `toggle` IPC at any time; the next sunrise or sunset puts the
+theme back on the scheduled side.
+
+To remove the integration later:
+
+```bash
+systemctl --user disable --now darkman.service
+rm -f ~/.local/share/darkman/theme-toggler
+```
+
+darkman only handles sunrise/sunset. For fixed clock times, a systemd user
+timer that calls `omarchy-shell io.github.lay-z.theme-toggler apply light` and
+`apply dark` works the same way.
 
 ## Troubleshooting
 

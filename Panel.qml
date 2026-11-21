@@ -40,6 +40,7 @@ Panel {
   property var darkBackgrounds: []
   property string currentTheme: ""
   property string currentBackground: ""
+  property bool stateLoaded: false
   property bool busy: false
   property string notice: ""
   property bool noticeError: false
@@ -176,20 +177,33 @@ Panel {
     root.bar.run("omarchy launch config editor " + Model.shellQuote(path))
   }
 
-  function toggleTheme() {
-    if (busy) return
+  // Apply one specific side. Darkman and other external schedulers call this
+  // through IPC; the bar toggle is just applyMode(nextMode).
+  function applyMode(targetMode, requireState) {
+    if (busy) return "busy"
+    if (targetMode !== "light" && targetMode !== "dark") return "invalid"
+    // An external scheduler should wait for the first state read, otherwise it
+    // can re-apply a theme the session is already on and cycle the background.
+    if (requireState === true && !stateLoaded) return "no-state"
 
-    var targetMode = nextMode
     var targetTheme = targetMode === "light" ? lightTheme : darkTheme
     var targetBackground = targetMode === "light"
       ? configuredLightBackground
       : configuredDarkBackground
 
     if (!targetTheme) {
-      notice = strings.t("error.noThemes")
-      noticeError = true
-      return
+      // Before the first theme scan finishes, callers should retry rather than
+      // show a misleading "no themes" error.
+      if (themes.length > 0) {
+        notice = strings.t("error.noThemes")
+        noticeError = true
+      }
+      return "no-theme"
     }
+
+    // Already on the target theme: do not cycle the background or rerun hooks.
+    // An external scheduler may call us again after a restart or a retry.
+    if (currentTheme !== "" && currentTheme === targetTheme) return "already"
 
     root.close()
     busy = true
@@ -207,6 +221,11 @@ Panel {
       postHook
     ]
     applyProcess.running = true
+    return "ok"
+  }
+
+  function toggleTheme() {
+    applyMode(nextMode, false)
   }
 
   onLightThemeChanged: loadLightBackgrounds()
@@ -235,6 +254,7 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggleTheme() }
+    function apply(mode: string): string { return root.applyMode(mode, true) }
     function togglePanel(): void { root.toggle() }
     function refresh(): void { root.refreshAll() }
     function state(): string {
@@ -273,6 +293,7 @@ Panel {
     command: [root.listScript, "state"]
     stdout: StdioCollector { id: stateStdout; waitForEnd: true }
     onExited: function(exitCode) {
+      root.stateLoaded = true
       if (exitCode !== 0) return
       var state = Model.parseState(stateStdout.text)
       root.currentTheme = state.theme
