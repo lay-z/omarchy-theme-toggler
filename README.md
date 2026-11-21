@@ -251,7 +251,7 @@ omarchy pkg add darkman
 
 ### 2. Tell darkman where you are
 
-Create `~/.config/darkman/config.yaml`:
+Create or edit `~/.config/darkman/config.yaml`:
 
 ```yaml
 # Use a decimal latitude/longitude. This example is London.
