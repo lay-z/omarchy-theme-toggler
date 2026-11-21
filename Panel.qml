@@ -68,6 +68,12 @@ Panel {
   readonly property string tooltipText: strings.t(isLight ? "panel.tooltipDark" : "panel.tooltipLight")
   readonly property string fontFamily: bar && bar.fontFamily ? bar.fontFamily : Style.font.family
 
+  // The bar slot sizes itself from the widget's implicit size, the same way
+  // first-party Panel widgets do. Without this the button has no slot to fill
+  // and its glyph overflows above the bar.
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
+
   function backgroundChoices(backgrounds, selected) {
     var choices = [{ value: "", label: strings.t("panel.backgroundDefault") }]
     var seen = { "": true }
