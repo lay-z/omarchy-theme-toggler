@@ -107,6 +107,30 @@ if [[ -n $BACKGROUND ]]; then
   fi
 fi
 
+# Omarchy 4's omarchy-restart-opencode matches a process literally named
+# `opencode`, but current OpenCode releases run as `opencode.exe`, so the
+# signal never lands. The CLI's own reload command reaches every client of the
+# background service and is a no-op when the service is not running.
+reload_opencode() {
+  command -v opencode >/dev/null 2>&1 || return 0
+
+  local service
+  service=$(timeout 5 opencode service status 2>/dev/null || true)
+  if [[ $service != http* ]]; then
+    log "opencode service not running; skipped reload"
+    return 0
+  fi
+
+  log "opencode reload"
+  if timeout 20 opencode reload >>"$LOG" 2>&1; then
+    log "opencode reload ok"
+  else
+    log "opencode reload failed"
+  fi
+}
+
+reload_opencode
+
 if ! run_hook "$POST_HOOK" post; then
   notify normal "Theme changed" "The post-toggle hook failed. See $LOG"
   log "toggle finished with post hook failure"

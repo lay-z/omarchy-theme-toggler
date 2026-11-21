@@ -121,6 +121,14 @@ panel and it becomes one of the two sides.
 
 ## Pre/post hooks
 
+Before your hooks run, the plugin also refreshes OpenCode when it is installed:
+
+- If the OpenCode background service is running, it runs `opencode reload` so
+  every connected TUI picks up the new config. (Omarchy's own
+  `omarchy-restart-opencode` currently looks for a process named `opencode`,
+  while current releases run as `opencode.exe`, so that signal misses them.)
+- If OpenCode is not installed, or its service is stopped, the step is skipped.
+
 Two scripts let you run your own code around a switch. They are created for you
 on first load:
 
@@ -163,6 +171,35 @@ OMARCHY_THEME_TOGGLER_PREVIOUS_THEME
 OMARCHY_THEME_TOGGLER_PLUGIN_DIR
 ```
 
+### Tmux
+
+`omarchy theme set` already runs `omarchy-theme-set-tmux`, which updates the
+tmux server's theme environment, pane colors, cursor color, and window styles.
+It does not re-read your tmux configuration, so a config with a hardcoded theme
+(for example `set -g @catppuccin_flavor 'mocha'`) keeps the old look.
+
+Put the re-read in your post hook:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v tmux >/dev/null 2>&1 && tmux has-session >/dev/null 2>&1; then
+  # If you use catppuccin/tmux, remove the hardcoded @catppuccin_flavor line
+  # from tmux.conf and set it from the target mode here instead.
+  case "$1" in
+    light) tmux set -g @catppuccin_flavor latte ;;
+    dark) tmux set -g @catppuccin_flavor mocha ;;
+  esac
+
+  tmux source-file "$HOME/.config/tmux/tmux.conf"
+fi
+```
+
+If you do not use catppuccin/tmux, drop the `case` block and keep the
+`tmux source-file` line. That makes custom tmux styling follow whatever
+`omarchy-theme-set-tmux` just applied.
+
 ### Example post hook
 
 This refreshes tmux and the running herdr server after a theme change:
@@ -172,6 +209,10 @@ This refreshes tmux and the running herdr server after a theme change:
 set -euo pipefail
 
 if command -v tmux >/dev/null 2>&1 && tmux has-session >/dev/null 2>&1; then
+  case "$1" in
+    light) tmux set -g @catppuccin_flavor latte ;;
+    dark) tmux set -g @catppuccin_flavor mocha ;;
+  esac
   tmux source-file "$HOME/.config/tmux/tmux.conf"
 fi
 
