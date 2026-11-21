@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.lay-z.theme-toggler",
+  "name": "Theme Toggler",
+  "version": "1.0.0",
+  "author": "Priyav Shah",
+  "license": "MIT",
+  "description": "Sun/moon bar widget that switches between a light and a dark Omarchy theme, with per-mode backgrounds and pre/post hooks.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Theme Toggler",
+    "description": "Switch between your light and dark Omarchy themes from the bar.",
+    "category": "Appearance",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

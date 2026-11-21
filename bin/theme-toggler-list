@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# Read the pieces of Omarchy state the Theme Toggler plugin shows.
+#
+#   theme-toggler-list themes
+#   theme-toggler-list backgrounds <theme-slug>
+#   theme-toggler-list state
+#   theme-toggler-list init-hooks <config-dir>
+#
+# Everything is emitted as JSON so the QML side never has to parse paths or
+# display names out of column output.
+
+set -euo pipefail
+
+HOME_DIR=${HOME:?}
+OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}
+USER_THEMES="$HOME_DIR/.config/omarchy/themes"
+USER_BACKGROUNDS="$HOME_DIR/.config/omarchy/backgrounds"
+CURRENT_STATE="$HOME_DIR/.local/state/omarchy/current"
+
+pretty_name() {
+  sed -E 's/(^|-)([a-z])/\1\u\2/g; s/-/ /g' <<<"$1"
+}
+
+background_name() {
+  local name=${1##*/}
+  name=${name%.*}
+  name=${name#[0-9]*-}
+  pretty_name "$name"
+}
+
+# Theme directories, user-owned first so an overlay or fork of a stock theme
+# keeps the same slug and wins over the packaged copy.
+list_themes() {
+  local seen=" " slug dir
+  {
+    for dir in "$USER_THEMES"/* "$OMARCHY_PATH/themes"/*; do
+      [[ -d $dir ]] || continue
+      slug=${dir##*/}
+      [[ -n $slug && $slug != .* ]] || continue
+      # `omarchy theme set` addresses a slug; a directory with whitespace or a
+      # slash in its name cannot be round-tripped through that command.
+      [[ $slug != *[[:space:]]* && $slug != */* ]] || continue
+      case " $seen " in *" $slug "*) continue ;; esac
+      seen="$seen $slug "
+      printf '%s\t%s\n' "$slug" "$(pretty_name "$slug")"
+    done
+  } | jq -R -s '
+    split("\n")
+    | map(select(length > 0) | split("\t") | { slug: .[0], name: .[1] })
+  '
+}
+
+# Every file a user can pick for this theme, in the same places
+# omarchy-theme-set looks: the per-theme user background folder, then the
+# theme's own backgrounds. A basename is taken once, first directory wins.
+list_backgrounds() {
+  local slug=${1:-}
+  [[ -n $slug ]] || {
+    echo '[]'
+    return
+  }
+
+  local -a dirs=("$USER_BACKGROUNDS/$slug")
+  [[ -d $USER_THEMES/$slug/backgrounds ]] && dirs+=("$USER_THEMES/$slug/backgrounds")
+  [[ -d $OMARCHY_PATH/themes/$slug/backgrounds ]] && dirs+=("$OMARCHY_PATH/themes/$slug/backgrounds")
+
+  local dir path name base seen=" "
+  for dir in "${dirs[@]}"; do
+    [[ -d $dir ]] || continue
+    while IFS= read -r -d '' path; do
+      base=${path##*/}
+      case " $seen " in *" $base "*) continue ;; esac
+      seen="$seen $base "
+      name=$(background_name "$path")
+      printf '%s\t%s\n' "$path" "$name"
+    done < <(
+      find -L "$dir" -maxdepth 1 -type f \
+        \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' \
+           -o -iname '*.bmp' -o -iname '*.webp' -o -iname '*.mp4' -o -iname '*.m4v' \
+           -o -iname '*.mov' -o -iname '*.webm' -o -iname '*.mkv' -o -iname '*.avi' \) \
+        -print0 2>/dev/null | sort -z
+    )
+  done | jq -R -s '
+    split("\n")
+    | map(select(length > 0) | split("\t") | { path: .[0], name: .[1] })
+  '
+}
+
+current_state() {
+  local theme background name
+  theme=$(cat "$CURRENT_STATE/theme.name" 2>/dev/null || true)
+  theme=${theme//[[:space:]]/}
+  background=$(readlink -f "$CURRENT_STATE/background" 2>/dev/null || true)
+  name=$(pretty_name "$theme")
+  jq -nc --arg theme "$theme" --arg name "$name" --arg background "$background" \
+    '{ theme: $theme, name: $name, background: $background }'
+}
+
+# Create the hook files with helpful comments the first time the plugin is
+# loaded. Existing files are never touched.
+init_hooks() {
+  local dir=${1:-"$HOME_DIR/.config/omarchy/theme-toggler"}
+  mkdir -p "$dir"
+
+  create_hook "$dir/pre-toggle.sh" "before"
+  create_hook "$dir/post-toggle.sh" "after"
+}
+
+create_hook() {
+  local path=$1 when=$2
+  [[ -e $path ]] && return 0
+
+  cat >"$path" <<EOF
+#!/usr/bin/env bash
+# Runs $when Theme Toggler changes the theme.
+#
+# Arguments:
+#   \$1  target mode: light or dark
+#   \$2  target theme slug, e.g. catppuccin
+#   \$3  target background path, or empty for the theme's default
+#   \$4  previous theme slug
+#
+# Environment:
+#   OMARCHY_THEME_TOGGLER_MODE
+#   OMARCHY_THEME_TOGGLER_THEME
+#   OMARCHY_THEME_TOGGLER_BACKGROUND
+#   OMARCHY_THEME_TOGGLER_PREVIOUS_THEME
+#   OMARCHY_THEME_TOGGLER_PLUGIN_DIR
+#
+# Add your commands below. See the plugin README for examples.
+
+set -euo pipefail
+EOF
+  chmod 755 "$path"
+}
+
+command=${1:-}
+case "$command" in
+themes)
+  list_themes
+  ;;
+backgrounds)
+  list_backgrounds "${2:-}"
+  ;;
+state)
+  current_state
+  ;;
+init-hooks)
+  init_hooks "${2:-}"
+  ;;
+*)
+  echo "Usage: theme-toggler-list {themes|backgrounds <theme>|state|init-hooks <dir>}" >&2
+  exit 2
+  ;;
+esac

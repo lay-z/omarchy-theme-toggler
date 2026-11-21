@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Apply one side of a light/dark pair, then run the user's hooks.
+#
+#   theme-toggler-apply <mode> <theme> <background> <pre-hook> <post-hook>
+#
+# Exit codes:
+#   0  theme and background applied
+#   1  nothing changed (bad arguments, pre-hook failed, theme set failed)
+#   2  theme changed but the post-hook failed
+#
+# The plugin's QML side shows these outcomes; all output also goes to
+# ~/.local/state/omarchy/theme-toggler.log.
+
+set -uo pipefail
+
+MODE=${1:-}
+THEME=${2:-}
+BACKGROUND=${3:-}
+PRE_HOOK=${4:-}
+POST_HOOK=${5:-}
+
+HOME_DIR=${HOME:?}
+PLUGIN_DIR=${OMARCHY_THEME_TOGGLER_PLUGIN_DIR:-${0%/*}/..}
+STATE_DIR="$HOME_DIR/.local/state/omarchy"
+LOG="$STATE_DIR/theme-toggler.log"
+HOOK_TIMEOUT=${OMARCHY_THEME_TOGGLER_HOOK_TIMEOUT:-120}
+
+mkdir -p "$STATE_DIR"
+
+log() {
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG"
+}
+
+notify() {
+  local urgency=$1 headline=$2 body=$3
+  command -v omarchy-notification-send >/dev/null 2>&1 || return 0
+  omarchy-notification-send -u "$urgency" --app-name "Theme Toggler" "$headline" "$body" >/dev/null 2>&1 || true
+}
+
+usage() {
+  echo "Usage: theme-toggler-apply <light|dark> <theme> <background> <pre-hook> <post-hook>" >&2
+}
+
+if [[ $MODE != light && $MODE != dark ]]; then
+  usage
+  exit 1
+fi
+if [[ -z $THEME ]]; then
+  usage
+  exit 1
+fi
+
+PREVIOUS_THEME=$(cat "$STATE_DIR/current/theme.name" 2>/dev/null || true)
+PREVIOUS_THEME=${PREVIOUS_THEME//[[:space:]]/}
+
+export OMARCHY_THEME_TOGGLER_MODE=$MODE
+export OMARCHY_THEME_TOGGLER_THEME=$THEME
+export OMARCHY_THEME_TOGGLER_BACKGROUND=$BACKGROUND
+export OMARCHY_THEME_TOGGLER_PREVIOUS_THEME=$PREVIOUS_THEME
+export OMARCHY_THEME_TOGGLER_PLUGIN_DIR=$PLUGIN_DIR
+
+# Run from a stable directory so a hook that uses relative paths behaves the
+# same no matter what the shell's working directory happened to be.
+cd "$HOME_DIR" || exit 1
+
+run_hook() {
+  local hook=$1 phase=$2
+  [[ -n $hook && -f $hook ]] || return 0
+
+  log "$phase hook start: $hook"
+  local status=0
+  timeout --foreground "$HOOK_TIMEOUT" bash "$hook" \
+    "$MODE" "$THEME" "$BACKGROUND" "$PREVIOUS_THEME" >>"$LOG" 2>&1 || status=$?
+
+  if [[ $status -eq 0 ]]; then
+    log "$phase hook ok: $hook"
+    return 0
+  fi
+
+  log "$phase hook failed ($status): $hook"
+  return "$status"
+}
+
+log "toggle start: $PREVIOUS_THEME -> $THEME ($MODE), background=${BACKGROUND:-theme-default}"
+
+if ! run_hook "$PRE_HOOK" pre; then
+  notify critical "Theme unchanged" "The pre-toggle hook failed. See $LOG"
+  log "toggle aborted by pre hook"
+  exit 1
+fi
+
+if ! omarchy theme set "$THEME" >>"$LOG" 2>&1; then
+  notify critical "Theme not applied" "omarchy theme set $THEME failed. See $LOG"
+  log "omarchy theme set failed"
+  exit 1
+fi
+
+if [[ -n $BACKGROUND ]]; then
+  if [[ -f $BACKGROUND ]]; then
+    if ! omarchy theme bg set "$BACKGROUND" >>"$LOG" 2>&1; then
+      notify normal "Background not applied" "The theme changed, but the background could not be set. See $LOG"
+      log "omarchy theme bg set failed: $BACKGROUND"
+    fi
+  else
+    notify normal "Background not found" "$BACKGROUND"
+    log "background missing, left theme default: $BACKGROUND"
+  fi
+fi
+
+if ! run_hook "$POST_HOOK" post; then
+  notify normal "Theme changed" "The post-toggle hook failed. See $LOG"
+  log "toggle finished with post hook failure"
+  exit 2
+fi
+
+log "toggle done: $THEME ($MODE)"
+exit 0
